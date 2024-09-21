@@ -17,13 +17,13 @@ import java.util.Random;
 @Service
 public class ResponseService {
 
-    @Autowired
-    private HealthRepository healthRepository;
+    private static final Logger logger = LoggerFactory.getLogger(ResponseService.class);
 
     @Autowired
     private ResponseRepository responseRepository;
 
-    private final Logger logger = LoggerFactory.getLogger(ResponseService.class);
+    @Autowired
+    private HealthRepository healthRepository;
 
     private final int MAX_REQUESTS_PER_MINUTE = 20;
     private final int MAX_ALLOWED_DIFF = 60;
@@ -31,40 +31,27 @@ public class ResponseService {
     private int requestsInCurrentWindow = 0;
     private int totalExcessRequests = 0;
     private LocalDateTime windowStartTime = LocalDateTime.now();
+
     private Random random = new Random();
 
-    @Scheduled(fixedRate = 60000) 
+    @Scheduled(fixedRate = 60000)
     public void generateAndSendRandomRequests() {
         int requestsToSendInMinute = random.nextInt(101);
         int intervalInMs = 60000 / Math.max(requestsToSendInMinute, 1);
 
-        logger.info("===== Minute Window Start: " + windowStartTime + " =====");
-        logger.info("[" + LocalDateTime.now() + "] Requests to send in this minute: " + requestsToSendInMinute);
+        logger.info("Requests to send in this minute: " + requestsToSendInMinute);
 
         for (int i = 0; i < requestsToSendInMinute; i++) {
             saveRandomResponse();
             try {
                 Thread.sleep(intervalInMs);
             } catch (InterruptedException e) {
-                logger.error("[" + LocalDateTime.now() + "] Interrupted during sleep: " + e.getMessage());
-                Thread.currentThread().interrupt(); 
-                return;
-            } catch (Exception e) {
-                logger.error("[" + LocalDateTime.now() + "] Failed to process request: " + e.getMessage());
-                if (e.getMessage().contains("System crashed")) {
-                    forceCrash();
-                }
+                logger.error("Interrupted during sleep: " + e.getMessage());
+                Thread.currentThread().interrupt();
             }
         }
 
-
-        LocalDateTime currentTime = LocalDateTime.now();
-        long secondsElapsedInWindow = Duration.between(windowStartTime, currentTime).getSeconds();
-        if (secondsElapsedInWindow >= 60) {
-            windowStartTime = currentTime;
-            requestsInCurrentWindow = 0; 
-            totalExcessRequests = 0; 
-        }
+        logger.info("Number of requests processed in this minute: " + requestsToSendInMinute);
     }
 
     public Response saveRandomResponse() {
@@ -73,17 +60,43 @@ public class ResponseService {
         if (health == null) {
             health = new Health();
             health.setNumRequests(0);
-            health.setFlag(1); 
+            health.setFlag(1);
             healthRepository.save(health);
         }
 
         if (health.getFlag() != null && health.getFlag() == 0) {
-            logger.error("[" + LocalDateTime.now() + "] System crashed. No further requests will be processed.");
             throw new RuntimeException("System crashed. No further requests will be processed.");
         }
 
+        LocalDateTime currentTime = LocalDateTime.now();
+        long secondsElapsedInWindow = Duration.between(windowStartTime, currentTime).getSeconds();
+
+        if (secondsElapsedInWindow >= 60) {
+            windowStartTime = currentTime;
+            requestsInCurrentWindow = 0;
+            // Reset totalExcessRequests at the start of a new window if desired
+            totalExcessRequests = 0;
+        }
+
+        requestsInCurrentWindow++;
+
+        if (requestsInCurrentWindow > MAX_REQUESTS_PER_MINUTE) {
+            // Increment totalExcessRequests by 1 for each excess request
+            totalExcessRequests += 1;
+
+            logger.info("Excess requests in current window: " + (requestsInCurrentWindow - MAX_REQUESTS_PER_MINUTE));
+            logger.info("Total excess requests: " + totalExcessRequests);
+
+            if (totalExcessRequests > MAX_ALLOWED_DIFF) {
+                health.setFlag(0);
+                healthRepository.save(health);
+                forceCrash();
+            }
+        }
 
         String randomData = generateRandomString();
+        logger.info("Generated Data: " + randomData + " | Timestamp: " + currentTime);
+
         Response response = new Response();
         response.setData(randomData);
         response.setTimestamp(LocalDateTime.now());
@@ -91,40 +104,34 @@ public class ResponseService {
 
         responseRepository.save(response);
 
-        int newRequestCount = health.getNumRequests() + 1;
-        health.setNumRequests(newRequestCount);
+        if (health != null) {
+            int newRequestCount = health.getNumRequests() + 1;
+            health.setNumRequests(newRequestCount);
 
-        
-        requestsInCurrentWindow++;
-        if (requestsInCurrentWindow > MAX_REQUESTS_PER_MINUTE) {
-            totalExcessRequests++;
+            int diff = totalExcessRequests;
+            health.setDiff(diff);
+
+            if (diff > MAX_ALLOWED_DIFF) {
+                health.setFlag(0);
+            } else {
+                health.setFlag(1);
+            }
+            healthRepository.save(health);
         }
 
-        
-        int diff = totalExcessRequests;
-        health.setDiff(diff);
-        if (diff > MAX_ALLOWED_DIFF) {
-            health.setFlag(0);
-            logger.info("[" + LocalDateTime.now() + "] Total Excess Requests: " + totalExcessRequests + " | Difference: " + diff + " | Flag set to 0 - System will crash");
-            forceCrash(); 
-        } else {
-            health.setFlag(1);
-            logger.info("[" + LocalDateTime.now() + "] Request processed: " + randomData + " | Total Excess Requests: " + totalExcessRequests + " | Flag set to 1");
-        }
-
-        healthRepository.save(health);
         return response;
     }
 
     private void forceCrash() {
-        logger.error("[" + LocalDateTime.now() + "] System Crashed !!");
-        System.exit(1); 
+        logger.error("System Crashed !!");
+        System.exit(1);
     }
 
     private String generateRandomString() {
-        int leftLimit = 97; 
-        int rightLimit = 122; 
+        int leftLimit = 97;
+        int rightLimit = 122;
         int targetStringLength = 10;
+        Random random = new Random();
 
         return random.ints(leftLimit, rightLimit + 1)
                 .limit(targetStringLength)
