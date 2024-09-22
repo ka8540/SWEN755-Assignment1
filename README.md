@@ -81,8 +81,9 @@ java -version
 3. Run the System:
    Start the System by running: ```mvm spring-boot:run```
 
-4. ![img.png](Images/img.png)
-By running the program multiple times, we can observe the crash does not always occur at the same minute or with the same number of total excess requests, demonstrating its non-deterministic nature.
+4. By running the program multiple times, we can observe the crash does not always occur at the same minute or with the same number of total excess requests, demonstrating its non-deterministic nature.
+
+![img.png](Images/img.png)
 
 ## License
 MIT license
