@@ -32,4 +32,18 @@ public class ResponseController {
         // check
         return ResponseEntity.ok("Response service is alive");
     }
+
+    // Endpoint to receive synchronization data from replica
+    @PostMapping("/replica-sync")
+    public ResponseEntity<String> syncFromReplica(@RequestBody String data) {
+        responseService.processReplicaData(data);
+        return ResponseEntity.ok("Data synchronized from replica.");
+    }
+
+    // Endpoint to provide random number for fault recovery
+    @GetMapping("/random-number")
+    public ResponseEntity<Integer> getRandomNumber() {
+        int randomNumber = responseService.getRandomNumber();
+        return ResponseEntity.ok(randomNumber);
+    }
 }
