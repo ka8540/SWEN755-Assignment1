@@ -16,6 +16,7 @@ import org.springframework.http.ResponseEntity;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
 public class ResponseService {
@@ -34,16 +35,28 @@ public class ResponseService {
     private int requestsInCurrentWindow = 0;
     private int totalExcessRequests = 0;
     private LocalDateTime windowStartTime = LocalDateTime.now();
-    private boolean responseAlive = true; // Track if /response is up
+
+    private AtomicBoolean isAlive = new AtomicBoolean(true); // Added isAlive flag
 
     private Random random = new Random();
     private RestTemplate restTemplate = new RestTemplate();
 
+    // Getter for isAlive
+    public boolean getIsAlive() {
+        return isAlive.get();
+    }
+
+    // Setter for isAlive
+    public void setIsAlive(boolean isAlive) {
+        this.isAlive.set(isAlive);
+    }
+
+    // Scheduled method to generate and send random requests
     @Scheduled(fixedRate = 60000)
     public void generateAndSendRandomRequests() {
-        if (!responseAlive) {
-            logger.info("System is down. No further requests will be sent to /response.");
-            return; // Stop sending requests if /response is down
+        if (!isAlive.get()) {
+            logger.info("Service is down. No further requests will be sent.");
+            return; // Stop sending requests if the service is down
         }
 
         int requestsToSendInMinute = random.nextInt(101); // Random number of requests to send
@@ -102,7 +115,7 @@ public class ResponseService {
         } catch (HttpStatusCodeException e) {
             if (e.getStatusCode().value() == 404) {
                 logger.info("/response returned 404. No further requests.");
-                responseAlive = false; // Mark /response as down
+                isAlive.set(false); // Mark service as down
             } else {
                 logger.error("Error while sending data to /response: " + e.getMessage());
             }
@@ -132,20 +145,25 @@ public class ResponseService {
                     String.class);
             if (responseHealthCheck.getStatusCode().is2xxSuccessful()) {
                 logger.info("/response is still alive.");
-                responseAlive = true; // Mark response as alive
+                isAlive.set(true); // Mark service as alive
             } else {
                 logger.error("/response is down. Status code: " + responseHealthCheck.getStatusCode().value());
-                responseAlive = false;
+                isAlive.set(false);
                 logger.info("System is down.");
             }
         } catch (HttpStatusCodeException e) {
             logger.error("/response is down. Error while checking /response status: " + e.getMessage());
-            responseAlive = false;
+            isAlive.set(false);
             logger.info("System is down.");
         }
     }
 
+    // Save random response after checking isAlive status
     public Response saveRandomResponse(String randomData) {
+        if (!isAlive.get()) {
+            throw new RuntimeException("Service is down");
+        }
+
         Health health = healthRepository.findFirstByOrderByIdDesc();
 
         if (health == null) {
@@ -212,7 +230,7 @@ public class ResponseService {
         logger.error("System Crashed !! No further data processing will occur.");
 
         // Mark the service as non-operational
-        responseAlive = false;
+        isAlive.set(false);
 
         // Perform final check on /response
         try {
@@ -261,3 +279,4 @@ public class ResponseService {
                 .toString();
     }
 }
+    
