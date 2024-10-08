@@ -46,7 +46,7 @@ public class ResponseService {
 
     private int randomNumber = -1; // For random number generation in fault recovery
 
-    @Scheduled(fixedRate = 60000)
+    @Scheduled(fixedRate = 60000) // This method runs every 60 seconds
     public void generateAndSendRandomRequests() {
         if (!responseAlive) {
             logger.info("System is down. No further requests will be sent to /response.");
@@ -54,31 +54,27 @@ public class ResponseService {
         }
 
         int requestsToSendInMinute = random.nextInt(101); // Random number of requests to send
-        // Adjust the interval based on the number of requests
         int intervalInMs = 60000 / Math.max(requestsToSendInMinute, 1); // Calculate interval
-        intervalInMs = Math.max(intervalInMs, 1000); // Ensure at least 1 second between each request
 
         logger.info("Requests to send in this minute: " + requestsToSendInMinute);
 
+        // Reset the request counters at the start of the window
+        requestsInCurrentWindow = 0; // Reset request counter for the new minute
+
         for (int i = 0; i < requestsToSendInMinute; i++) {
+            // Calculate excess requests
+            excessRequestsInCurrentWindow = requestsInCurrentWindow - MAX_REQUESTS_PER_MINUTE;
+            logger.info("ExcessRequest:" + excessRequestsInCurrentWindow);
             boolean requestSuccessful = sendRandomDataToResponse();
+            requestsInCurrentWindow++; // Increment the number of requests in the current window
             if (requestSuccessful) {
-                logger.info("Request to /response successful.");
             } else {
                 logger.info("Request to /response failed. Halting further requests and checking /response status.");
                 checkResponseHealth();
                 break; // Exit the loop and stop further processing after a failure
             }
 
-            if (i % 40 == 39) { // After every 40 requests, take a 3-second break
-                try {
-                    Thread.sleep(3000); // Wait for 3 seconds
-                } catch (InterruptedException e) {
-                    logger.error("Interrupted during scheduled pause: " + e.getMessage());
-                    Thread.currentThread().interrupt();
-                }
-            }
-
+            // Wait between requests
             try {
                 Thread.sleep(intervalInMs); // Wait before sending the next request
             } catch (InterruptedException e) {
@@ -129,14 +125,11 @@ public class ResponseService {
         LocalDateTime currentTime = LocalDateTime.now();
         long secondsElapsedInWindow = Duration.between(windowStartTime, currentTime).getSeconds();
 
+        // Reset window if 60 seconds have passed
         if (secondsElapsedInWindow >= 60) {
-            windowStartTime = currentTime;
-            requestsInCurrentWindow = 0;
+            windowStartTime = currentTime; // Reset the window start time
+            requestsInCurrentWindow = 0; // Reset the requests counter
         }
-
-        requestsInCurrentWindow++;
-
-        excessRequestsInCurrentWindow = requestsInCurrentWindow - MAX_REQUESTS_PER_MINUTE;
 
         if (excessRequestsInCurrentWindow > 0) {
             logger.info("Excess requests in current window: " + excessRequestsInCurrentWindow);
@@ -146,8 +139,6 @@ public class ResponseService {
                 health.setFlag(0);
                 healthRepository.save(health);
                 forceCrash();
-            } else {
-                excessRequestsInCurrentWindow = 0;
             }
         }
 
@@ -158,19 +149,19 @@ public class ResponseService {
 
         responseRepository.save(response);
 
-        if (health != null) {
-            int newRequestCount = health.getNumRequests() + 1;
-            health.setNumRequests(newRequestCount);
+        // Update health statistics
+        int newRequestCount = health.getNumRequests() + 1;
+        health.setNumRequests(newRequestCount);
 
-            health.setDiff(excessRequestsInCurrentWindow);
+        health.setDiff(excessRequestsInCurrentWindow);
 
-            if (excessRequestsInCurrentWindow > MAX_ALLOWED_DIFF) {
-                health.setFlag(0);
-            } else {
-                health.setFlag(1);
-            }
-            healthRepository.save(health);
+        if (excessRequestsInCurrentWindow > MAX_ALLOWED_DIFF) {
+            health.setFlag(0);
+        } else {
+            health.setFlag(1);
         }
+
+        healthRepository.save(health);
 
         // Broadcast operation to the other instance
         broadcastOperationToReplica(randomData);
@@ -179,14 +170,14 @@ public class ResponseService {
     }
 
     private void broadcastOperationToReplica(String data) {
-        int otherInstancePort = (serverPort == 8081) ? 8082 : 8081;
+        int otherInstancePort = (serverPort == 8080) ? 8081 : 8080; // Use updated serverPort
         String replicaUrl = "http://localhost:" + otherInstancePort + "/response/replica-sync";
 
         try {
             restTemplate.postForEntity(replicaUrl, data, String.class);
             logger.info("Broadcasted operation to replica at {}", replicaUrl);
         } catch (Exception e) {
-            logger.error("Failed to broadcast operation to replica: {}");
+            logger.error("Failed to broadcast operation to replica: {}", e.getMessage());
         }
     }
 
@@ -241,7 +232,12 @@ public class ResponseService {
             }
         } else {
             logger.info("This instance (port {}) will stop processing requests.", serverPort);
-            // Mark the service as non-operational
+
+            // Shift to the other instance (winning port)
+            serverPort = otherInstancePort; // Update the current port to the other instance's port
+            logger.info("System is now operating on port {}", serverPort);
+
+            // Mark the service as non-operational temporarily for this instance
             responseAlive = false;
 
             // Inform the health controller to stop routing traffic to this instance
@@ -251,6 +247,8 @@ public class ResponseService {
             scheduleInstanceRestart(serverPort, 10000); // Restart after 10 seconds
         }
 
+        windowStartTime = LocalDateTime.now(); // Start a new request window after the port shift
+        requestsInCurrentWindow = 0;
         // Reset totalExcessRequests back to 0 after force crash
         excessRequestsInCurrentWindow = 0;
         requestsInCurrentWindow = MAX_REQUESTS_PER_MINUTE; // So that excessRequestsInCurrentWindow becomes 0
@@ -283,10 +281,18 @@ public class ResponseService {
         String url = "http://localhost:" + port + "/response/random-number";
         try {
             ResponseEntity<Integer> response = restTemplate.getForEntity(url, Integer.class);
-            return response.getBody();
+            Integer randomNumber = response.getBody(); // Get the response body
+
+            // Check if the random number is null and return a default value if necessary
+            if (randomNumber != null) {
+                return randomNumber;
+            } else {
+                logger.warn("Received null random number from instance on port {}. Returning default value 0.", port);
+                return 0; // Default to 0 if the response body is null
+            }
         } catch (Exception e) {
             logger.error("Failed to get random number from instance on port {}: {}", port, e.getMessage());
-            return 0; // Default to 0 if other instance is down
+            return 0; // Default to 0 if other instance is down or an error occurs
         }
     }
 

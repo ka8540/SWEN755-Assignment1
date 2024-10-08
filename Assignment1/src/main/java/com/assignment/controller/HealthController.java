@@ -42,15 +42,14 @@ public class HealthController {
     // Scheduled method to check health of instances every 5 seconds
     @Scheduled(fixedRate = 5000) // Every 5 seconds
     public void monitorInstances() {
-        checkInstanceHealth("http://localhost:8081/health", "Instance 1");
-        checkInstanceHealth("http://localhost:8082/health", "Instance 2");
+        checkInstanceHealth("http://localhost:8080/health", "Instance 1");
+        checkInstanceHealth("http://localhost:8081/health", "Instance 2");
     }
 
     private void checkInstanceHealth(String url, String instanceName) {
         try {
             ResponseEntity<Health> response = restTemplate.getForEntity(url, Health.class);
             if (response.getStatusCode().is2xxSuccessful()) {
-                logger.info("{} is healthy.", instanceName);
                 if ("Instance 1".equals(instanceName)) {
                     instance1Alive = true;
                 } else if ("Instance 2".equals(instanceName)) {
@@ -81,50 +80,18 @@ public class HealthController {
             instance2Alive = false;
         }
 
-        // Since the load balancer uses health checks, it will stop routing traffic to
-        // the downed instance
-
         // Simulate notification to administrators or alerting system
         logger.info("Sending alert: {} is down", instanceName);
-
-        // Optionally, simulate restarting the instance
-        logger.info("Scheduling {} for restart", instanceName);
-
-        // Simulate that the instance is restarted after some time
-        scheduleInstanceRestart(instanceName, port, 10000); // Restart after 10 seconds
-    }
-
-    private void scheduleInstanceRestart(String instanceName, int port, long delayMillis) {
-        // Create a new thread to simulate the instance restart
-        new Thread(() -> {
-            try {
-                Thread.sleep(delayMillis);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-
-            // Simulate the instance is back up
-            logger.info("{} has been restarted", instanceName);
-
-            // Update internal state
-            if ("Instance 1".equals(instanceName)) {
-                instance1Alive = true;
-            } else if ("Instance 2".equals(instanceName)) {
-                instance2Alive = true;
-            }
-
-            // The load balancer's health checks will detect that the instance is back up
-        }).start();
     }
 
     // Endpoint to handle instance-down notifications from instances
     @PostMapping("/instance-down")
     public ResponseEntity<String> instanceDown(@RequestParam int port) {
-        if (port == 8081) {
+        if (port == 8080) {
             instance1Alive = false;
             logger.info("Received notification that Instance 1 is down.");
             handleFaultRecovery("Instance 1", port);
-        } else if (port == 8082) {
+        } else if (port == 8081) {
             instance2Alive = false;
             logger.info("Received notification that Instance 2 is down.");
             handleFaultRecovery("Instance 2", port);
