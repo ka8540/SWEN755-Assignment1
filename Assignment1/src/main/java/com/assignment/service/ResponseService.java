@@ -47,7 +47,7 @@ public class ResponseService {
 
     private int randomNumber = -1; // For random number generation in fault recovery
 
-    @Scheduled(fixedRate = 60000) // This method runs every 60 seconds
+    @Scheduled(fixedRate = 120000) // This method runs every 120 seconds
     public void generateAndSendRandomRequests() {
         if (!responseAlive) {
             logger.info("System is down. No further requests will be sent to /response.");
@@ -55,7 +55,7 @@ public class ResponseService {
         }
 
         int requestsToSendInMinute = random.nextInt(101); // Random number of requests to send
-        int intervalInMs = 60000 / Math.max(requestsToSendInMinute, 1); // Calculate interval
+        int intervalInMs = 120000 / Math.max(requestsToSendInMinute, 1); // Calculate interval
 
         requestsToSendInMinute2 = requestsToSendInMinute;
 
@@ -128,8 +128,8 @@ public class ResponseService {
         LocalDateTime currentTime = LocalDateTime.now();
         long secondsElapsedInWindow = Duration.between(windowStartTime, currentTime).getSeconds();
 
-        // Reset window if 60 seconds have passed
-        if (secondsElapsedInWindow >= 60) {
+        // Reset window if 120 seconds have passed
+        if (secondsElapsedInWindow >= 120) {
             windowStartTime = currentTime; // Reset the window start time
             requestsInCurrentWindow = 0; // Reset the requests counter
         }
@@ -267,6 +267,7 @@ public class ResponseService {
             logger.info("New window on port {} will send {} requests after accounting for excess requests of {}.",
                     serverPort, requestsToSendInNewWindow, totalExcessRequest);
 
+            int intervalInMs = 120000 / Math.max(requestsToSendInMinute2, 1);
             // Start the new request window with the reduced number of requests
             for (int i = 0; i < requestsToSendInNewWindow; i++) {
                 boolean requestSuccessful = sendRandomDataToResponse();
@@ -274,6 +275,15 @@ public class ResponseService {
                     logger.info("Request to /response failed. Halting further requests.");
                     break; // Exit loop if there's a failure
                 }
+
+                // Wait between requests
+                try {
+                    Thread.sleep(intervalInMs); // Wait before sending the next request
+                } catch (InterruptedException e) {
+                    logger.error("Interrupted during sleep: " + e.getMessage());
+                    Thread.currentThread().interrupt();
+                }
+
             }
         }
     }
