@@ -40,6 +40,7 @@ public class ResponseService {
     private RestTemplate restTemplate = new RestTemplate();
 
     private int excessRequestsInCurrentWindow = 0;
+    private int requestsToSendInMinute2 = 0;
 
     @Value("${server.port}")
     private int serverPort;
@@ -55,6 +56,8 @@ public class ResponseService {
 
         int requestsToSendInMinute = random.nextInt(101); // Random number of requests to send
         int intervalInMs = 60000 / Math.max(requestsToSendInMinute, 1); // Calculate interval
+
+        requestsToSendInMinute2 = requestsToSendInMinute;
 
         logger.info("Requests to send in this minute: " + requestsToSendInMinute);
 
@@ -210,18 +213,21 @@ public class ResponseService {
     private void forceCrash() {
         logger.info("Initiating comparison to determine which instance will crash...");
 
-        // Generate a random number between 1 and 5
-        randomNumber = new Random().nextInt(5) + 1;
-        logger.info("Instance on port {} generated random number: {}", serverPort, randomNumber);
-
         // Get random number from the other instance
         int otherInstancePort = (serverPort == 8080) ? 8081 : 8080;
-        int otherRandomNumber = getRandomNumberFromOtherInstance(otherInstancePort);
+        int otherRandomNumber;
+        do {
+            // Generate a random number between 1 and 5 (inclusive)
+            randomNumber = new Random().nextInt(5) + 1;
+            logger.info("Instance on port {} generated random number: {}", serverPort, randomNumber);
 
-        logger.info("Other instance on port {} has random number: {}", otherInstancePort, otherRandomNumber);
+            // Get random number from the other instance
+            otherRandomNumber = getRandomNumberFromOtherInstance(otherInstancePort);
+            logger.info("Other instance on port {} has random number: {}", otherInstancePort, otherRandomNumber);
 
-        // Compare random numbers, the instance with the lower number will be marked as
-        // down
+        } while (randomNumber == otherRandomNumber || randomNumber < 1 || otherRandomNumber < 1);
+
+        // Compare random numbers, the instance with the lower number will continue
         if (randomNumber < otherRandomNumber) {
             logger.info("This instance (port {}) will continue running. Other instance will go down.", serverPort);
             // Reset health flag to operational
@@ -233,6 +239,9 @@ public class ResponseService {
         } else {
             logger.info("This instance (port {}) will stop processing requests.", serverPort);
 
+            // Inform the health controller that this instance is down
+            informHealthEndpoint(serverPort); // Pass the current instance's port
+
             // Shift to the other instance (winning port)
             serverPort = otherInstancePort; // Update the current port to the other instance's port
             logger.info("System is now operating on port {}", serverPort);
@@ -240,19 +249,33 @@ public class ResponseService {
             // Mark the service as non-operational temporarily for this instance
             responseAlive = false;
 
-            // Inform the health controller to stop routing traffic to this instance
-            informHealthEndpoint();
-
             // Simulate restarting the instance after a delay (e.g., 10 seconds)
             scheduleInstanceRestart(serverPort, 10000); // Restart after 10 seconds
-        }
 
-        windowStartTime = LocalDateTime.now(); // Start a new request window after the port shift
-        requestsInCurrentWindow = 0;
-        // Reset totalExcessRequests back to 0 after force crash
-        excessRequestsInCurrentWindow = 0;
-        requestsInCurrentWindow = MAX_REQUESTS_PER_MINUTE; // So that excessRequestsInCurrentWindow becomes 0
-        logger.info("Reset excessRequestsInCurrentWindow and updated requestsInCurrentWindow after Crash.");
+            // ** Reset window for the new instance before sending requests **
+            windowStartTime = LocalDateTime.now(); // Start a new request window after the port shift
+            requestsInCurrentWindow = 0;
+            excessRequestsInCurrentWindow = 0;
+
+            // ** New Logic to Handle Excess Requests in New Window **
+            // Carry over excess requests to the new instance (8081)
+            int totalExcessRequest = excessRequestsInCurrentWindow;
+
+            // Reduce the number of requests to send in the new window
+            int requestsToSendInNewWindow = Math.max(requestsToSendInMinute2 - totalExcessRequest, 0);
+
+            logger.info("New window on port {} will send {} requests after accounting for excess requests of {}.",
+                    serverPort, requestsToSendInNewWindow, totalExcessRequest);
+
+            // Start the new request window with the reduced number of requests
+            for (int i = 0; i < requestsToSendInNewWindow; i++) {
+                boolean requestSuccessful = sendRandomDataToResponse();
+                if (!requestSuccessful) {
+                    logger.info("Request to /response failed. Halting further requests.");
+                    break; // Exit loop if there's a failure
+                }
+            }
+        }
     }
 
     private void scheduleInstanceRestart(int port, long delayMillis) {
@@ -277,37 +300,48 @@ public class ResponseService {
         }).start();
     }
 
-    private int getRandomNumberFromOtherInstance(int port) {
+    private Integer getRandomNumberFromOtherInstance(int port) {
         String url = "http://localhost:" + port + "/response/random-number";
-        try {
-            ResponseEntity<Integer> response = restTemplate.getForEntity(url, Integer.class);
-            Integer randomNumber = response.getBody(); // Get the response body
+        int attempts = 3; // Number of attempts to get a valid random number
+        Integer otherRandomNumber = null;
 
-            // Check if the random number is null and return a default value if necessary
-            if (randomNumber != null) {
-                return randomNumber;
-            } else {
-                logger.warn("Received null random number from instance on port {}. Returning default value 0.", port);
-                return 0; // Default to 0 if the response body is null
+        while (attempts-- > 0) {
+            try {
+                ResponseEntity<Integer> response = restTemplate.getForEntity(url, Integer.class);
+                otherRandomNumber = response.getBody(); // Get the response body
+
+                if (otherRandomNumber != null && otherRandomNumber >= 1) {
+                    return otherRandomNumber; // Valid random number
+                } else {
+                    logger.warn("Received invalid random number from instance on port {}. Retrying...", port);
+                }
+            } catch (Exception e) {
+                logger.error("Failed to get random number from instance on port {}: {}", port, e.getMessage());
             }
-        } catch (Exception e) {
-            logger.error("Failed to get random number from instance on port {}: {}", port, e.getMessage());
-            return 0; // Default to 0 if other instance is down or an error occurs
+
+            // Wait briefly before retrying (optional)
+            try {
+                Thread.sleep(500); // 500 milliseconds delay between retries
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
+
+        logger.warn("Failed to get valid random number from instance on port {}. Returning default value 1.", port);
+        return 1; // Default to 1 if all attempts fail
     }
 
-    private void informHealthEndpoint() {
+    private void informHealthEndpoint(int downedPort) {
         try {
-            // Send a signal or data to /health indicating that this instance is down
-            restTemplate.postForEntity("http://localhost:" + serverPort + "/health/instance-down?port=" + serverPort,
+            // Send a signal to /health indicating that the instance is down
+            restTemplate.postForEntity("http://localhost:" + downedPort + "/health/instance-down?port=" + downedPort,
                     null, String.class);
-            logger.info("Informed /health about instance on port {} being down.", serverPort);
+            logger.info("Informed /health about instance on port {} being down.", downedPort);
         } catch (Exception e) {
             logger.error("Failed to inform /health: " + e.getMessage());
         }
     }
 
-    // Endpoint to provide random number (should be in ResponseController)
     public int getRandomNumber() {
         return randomNumber;
     }
