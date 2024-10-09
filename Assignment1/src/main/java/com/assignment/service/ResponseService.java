@@ -30,7 +30,7 @@ public class ResponseService {
     private HealthRepository healthRepository;
 
     private final int MAX_REQUESTS_PER_MINUTE = 20;
-    private final int MAX_ALLOWED_DIFF = 60;
+    private final int MAX_ALLOWED_DIFF = 30;
 
     private int requestsInCurrentWindow = 0;
     private LocalDateTime windowStartTime = LocalDateTime.now();
@@ -40,14 +40,13 @@ public class ResponseService {
     private RestTemplate restTemplate = new RestTemplate();
 
     private int excessRequestsInCurrentWindow = 0;
-    private int requestsToSendInMinute2 = 0;
 
     @Value("${server.port}")
     private int serverPort;
 
     private int randomNumber = -1; // For random number generation in fault recovery
 
-    @Scheduled(fixedRate = 120000) // This method runs every 120 seconds
+    @Scheduled(fixedRate = 60000) // This method runs every 120 seconds
     public void generateAndSendRandomRequests() {
         if (!responseAlive) {
             logger.info("System is down. No further requests will be sent to /response.");
@@ -55,9 +54,7 @@ public class ResponseService {
         }
 
         int requestsToSendInMinute = random.nextInt(101); // Random number of requests to send
-        int intervalInMs = 120000 / Math.max(requestsToSendInMinute, 1); // Calculate interval
-
-        requestsToSendInMinute2 = requestsToSendInMinute;
+        int intervalInMs = 60000 / Math.max(requestsToSendInMinute, 1); // Calculate interval
 
         logger.info("Requests to send in this minute: " + requestsToSendInMinute);
 
@@ -128,8 +125,8 @@ public class ResponseService {
         LocalDateTime currentTime = LocalDateTime.now();
         long secondsElapsedInWindow = Duration.between(windowStartTime, currentTime).getSeconds();
 
-        // Reset window if 120 seconds have passed
-        if (secondsElapsedInWindow >= 120) {
+        // Reset window if 60 seconds have passed
+        if (secondsElapsedInWindow >= 60) {
             windowStartTime = currentTime; // Reset the window start time
             requestsInCurrentWindow = 0; // Reset the requests counter
         }
@@ -257,34 +254,15 @@ public class ResponseService {
             requestsInCurrentWindow = 0;
             excessRequestsInCurrentWindow = 0;
 
-            // ** New Logic to Handle Excess Requests in New Window **
-            // Carry over excess requests to the new instance (8081)
-            int totalExcessRequest = excessRequestsInCurrentWindow;
-
-            // Reduce the number of requests to send in the new window
-            int requestsToSendInNewWindow = Math.max(requestsToSendInMinute2 - totalExcessRequest, 0);
-
-            logger.info("New window on port {} will send {} requests after accounting for excess requests of {}.",
-                    serverPort, requestsToSendInNewWindow, totalExcessRequest);
-
-            int intervalInMs = 120000 / Math.max(requestsToSendInMinute2, 1);
-            // Start the new request window with the reduced number of requests
-            for (int i = 0; i < requestsToSendInNewWindow; i++) {
-                boolean requestSuccessful = sendRandomDataToResponse();
-                if (!requestSuccessful) {
-                    logger.info("Request to /response failed. Halting further requests.");
-                    break; // Exit loop if there's a failure
-                }
-
-                // Wait between requests
+            new Thread(() -> {
                 try {
-                    Thread.sleep(intervalInMs); // Wait before sending the next request
+                    Thread.sleep(1000); // Small delay before starting the requests, if needed
                 } catch (InterruptedException e) {
-                    logger.error("Interrupted during sleep: " + e.getMessage());
                     Thread.currentThread().interrupt();
                 }
+                generateAndSendRandomRequests(); // Start the request processing on the new instance
+            }).start();
 
-            }
         }
     }
 
