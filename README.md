@@ -12,7 +12,7 @@
 
     * Ahir, Kush Jayesh, ka8540
 
-    * Pandurangan, Bharathi bp6191
+    * Pandurangan, Bharathi, bp6191
 
 ## Project Overview
 This Project focuses on the design and implementation of the heartbeat architectural tactic.
@@ -84,6 +84,42 @@ java -version
 4. By running the program multiple times, we can observe the crash does not always occur at the same minute or with the same number of total excess requests, demonstrating its non-deterministic nature.
 
 ![img.png](Images/img.png)
+
+# Assignment2
+- This project implements an **Active Redundancy** system using a load balancer to ensure high availability. The system runs two instances simultaneously, processing identical data. If one instance crashes, the other automatically takes over. The health and status of each instance are monitored continuously to maintain seamless operations.
+
+- The system uses a load balancer to distribute incoming requests between two instances. Both instances (ports 8080 and 8081) work in parallel. The load balancer ensures that the traffic is split evenly, keeping both instances synchronized.
+
+- Run the System
+   ```
+   mvn spring-boot:run -Dspring-boot.run.arguments="--spring.profiles.active=default"
+   ```
+   ```
+   mvn spring-boot:run -Dspring-boot.run.arguments="--spring.profiles.active=instance1"
+   ```
+
+![Screenshot_1](Images/image.png)
+
+The system detects an excess number of requests, exceeding the allowed limit. 
+To handle this:
+- Instance 8080 generates a value of 5, and Instance 8081 generates a value of 3, representing the likelihood of each instance crashing.
+- Based on these values, the system determines that Instance 8080 will stop processing since it has a higher likelihood of failure.
+
+![Screenshot_2](Images/Screenshot_2.png)
+
+The Health Controller detects that Instance 8080 has gone down and initiates the fault recovery process:
+- An alert is sent to notify that Instance 8080 has stopped processing.
+- Instance 8081 takes over the processing of all incoming requests, ensuring the system continues operating without disruption.
+- The health system is updated to reflect the change, and the system now relies on Instance 8081.
+
+![Screenshot_3](Images/Screenshot_3.png)
+
+The system has successfully switched operations to Instance 8081:
+- A new time window is created for processing requests.
+- The system now operates with Instance 8081, preparing to handle new requests, while Instance 8080 is in recovery and will rejoin the system once it's ready.
+
+This **active redundancy** system ensures continuous availability by dynamically transitioning between instances if one fails. With the help of the load balancer, both instances work in parallel, and if one crashes, the other continues processing. The system is resilient, able to recover quickly and maintain high availability for incoming requests.
+
 
 ## License
 MIT license
