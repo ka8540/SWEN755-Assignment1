@@ -209,7 +209,7 @@ public class ResponseService {
 
     private void forceCrash() {
         logger.info("Initiating comparison to determine which instance will crash...");
-
+    
         // Get random number from the other instance
         int otherInstancePort = (serverPort == 8080) ? 8081 : 8080;
         int otherRandomNumber;
@@ -217,13 +217,13 @@ public class ResponseService {
             // Generate a random number between 1 and 5 (inclusive)
             randomNumber = new Random().nextInt(5) + 1;
             logger.info("Instance on port {} generated random number: {}", serverPort, randomNumber);
-
+    
             // Get random number from the other instance
             otherRandomNumber = getRandomNumberFromOtherInstance(otherInstancePort);
             logger.info("Other instance on port {} has random number: {}", otherInstancePort, otherRandomNumber);
-
-        } while (randomNumber == otherRandomNumber || randomNumber < 1 || otherRandomNumber < 1);
-
+    
+        } while (randomNumber == otherRandomNumber);
+    
         // Compare random numbers, the instance with the lower number will continue
         if (randomNumber < otherRandomNumber) {
             logger.info("This instance (port {}) will continue running. Other instance will go down.", serverPort);
@@ -235,36 +235,23 @@ public class ResponseService {
             }
         } else {
             logger.info("This instance (port {}) will stop processing requests.", serverPort);
-
+    
             // Inform the health controller that this instance is down
             informHealthEndpoint(serverPort); // Pass the current instance's port
-
-            // Shift to the other instance (winning port)
-            serverPort = otherInstancePort; // Update the current port to the other instance's port
-            logger.info("System is now operating on port {}", serverPort);
-
+    
             // Mark the service as non-operational temporarily for this instance
             responseAlive = false;
-
+    
             // Simulate restarting the instance after a delay (e.g., 10 seconds)
             scheduleInstanceRestart(serverPort, 10000); // Restart after 10 seconds
-
-            // ** Reset window for the new instance before sending requests **
-            windowStartTime = LocalDateTime.now(); // Start a new request window after the port shift
+    
+            // Reset window for the new instance before sending requests
+            windowStartTime = LocalDateTime.now(); // Start a new request window after restart
             requestsInCurrentWindow = 0;
             excessRequestsInCurrentWindow = 0;
-
-            new Thread(() -> {
-                try {
-                    Thread.sleep(1000); // Small delay before starting the requests, if needed
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-                generateAndSendRandomRequests(); // Start the request processing on the new instance
-            }).start();
-
         }
     }
+    
 
     private void scheduleInstanceRestart(int port, long delayMillis) {
         new Thread(() -> {
@@ -273,20 +260,22 @@ public class ResponseService {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
-
+    
             // Simulate the instance is back up
             logger.info("Instance on port {} has been restarted.", port);
-
+    
             // Update internal state to mark the instance as alive
             responseAlive = true;
             logger.info("System is operational again on port {}", port);
-
+    
             // Reset the counters
             excessRequestsInCurrentWindow = 0;
             requestsInCurrentWindow = 0;
+            windowStartTime = LocalDateTime.now(); // Reset the window start time
             logger.info("Reset excessRequestsInCurrentWindow and requestsInCurrentWindow after instance restart.");
         }).start();
     }
+    
 
     private Integer getRandomNumberFromOtherInstance(int port) {
         String url = "http://localhost:" + port + "/response/random-number";
