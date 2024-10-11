@@ -98,8 +98,7 @@ java -version
    mvn spring-boot:run -Dspring-boot.run.arguments="--spring.profiles.active=instance1"
    ```
 
-
-![Screenshot_1](Images\image.png)
+![Screenshot_1](Images/image.png)
 
 The system detects an excess number of requests, exceeding the allowed limit. 
 To handle this:
